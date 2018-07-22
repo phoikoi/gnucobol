@@ -17,7 +17,7 @@
 #
 # Makefile gnucobol
 #
-# Copyright (C) 2003-2012, 2014-2017 Free Software Foundation, Inc.
+# Copyright (C) 2003-2012, 2014-2018 Free Software Foundation, Inc.
 # Written by Keisuke Nishida, Roger While, Simon Sobisch
 #
 # This file is part of GnuCOBOL.
@@ -299,7 +299,6 @@ COB_FIX_LIBTOOL = @COB_FIX_LIBTOOL@
 COB_HAS_64_BIT_POINTER = @COB_HAS_64_BIT_POINTER@
 COB_HAS_CURSES = @COB_HAS_CURSES@
 COB_HAS_ISAM = @COB_HAS_ISAM@
-COB_HAS_UTC_OFFSET = @COB_HAS_UTC_OFFSET@
 COB_KEYWORD_INLINE = @COB_KEYWORD_INLINE@
 COB_LDFLAGS = @COB_LDFLAGS@
 COB_LIBRARY_PATH = @COB_LIBRARY_PATH@
@@ -453,6 +452,9 @@ BUILT_SOURCES = defaults.h
 DISTCLEANFILES = $(BUILT_SOURCES)
 # CLEANFILES = $(bin_SCRIPTS)
 EXTRA_DIST = gnucobol.spec po/update_linguas.sh
+
+# Add rules for code-coverage testing, as defined by AX_CODE_COVERAGE
+CODE_COVERAGE_BRANCH_COVERAGE = 1
 all: $(BUILT_SOURCES) config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
 
@@ -970,23 +972,21 @@ uninstall-am: uninstall-includeHEADERS
 
 
 # define prerequisites to fix parallel builds
-libcob: lib
+libcob: defaults.h lib
 cobc: libcob
 bin: libcob
 po: cobc
 doc: cobc
 extras: cobc
-tests: bin cobc
-
+test: bin cobc
+check: bin cobc
 # FIXME: needs GNU make, even if not enabled
-# Add rules for code-coverage testing, as defined by AX_CODE_COVERAGE
-#CODE_COVERAGE_BRANCH_COVERAGE=1
 #@ CODE_COVERAGE_RULES @
 
 dist-hook:
-	echo "#define COB_TAR_DATE \"`date -u +'%b %d %Y %T'` UTC\"" > $(distdir)/tarstamp.h
-	echo "#define COB_NUM_TAR_DATE `date -u +'%Y%m%d'`" >> $(distdir)/tarstamp.h
-	echo "#define COB_NUM_TAR_TIME `date -u +'%H%M%S'`" >> $(distdir)/tarstamp.h
+	echo "#define COB_TAR_DATE \"`LC_ALL=C date -u +'%b %d %Y %T'` UTC\"" > $(distdir)/tarstamp.h
+	echo "#define COB_NUM_TAR_DATE `LC_ALL=C date -u +'%Y%m%d'`" >> $(distdir)/tarstamp.h
+	echo "#define COB_NUM_TAR_TIME `LC_ALL=C date -u +'%H%M%S'`" >> $(distdir)/tarstamp.h
 	find $(distdir) -type d -print | xargs chmod 755
 	find $(distdir) -type f -print | xargs chmod 644
 	touch $(distdir)/m4/*.m4
@@ -1047,10 +1047,12 @@ defaults.h: Makefile.am $(top_builddir)/config.status
 	} > defaults.h
 
 # targets that are only logical targets instead of files
-.PHONY: test checkall
+.PHONY: test checkall checkmanual
 
 test: all
 	cd tests && $(MAKE) $(AM_MAKEFLAGS) test
+checkmanual: all
+	cd tests && $(MAKE) $(AM_MAKEFLAGS) checkmanual
 
 checkall: check test
 

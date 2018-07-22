@@ -1,5 +1,5 @@
 /*
-   Copyright (C) 2004-2012, 2014-2017 Free Software Foundation, Inc.
+   Copyright (C) 2004-2012, 2014-2018 Free Software Foundation, Inc.
    Written by Roger While, Simon Sobisch, Brian Tiffin
 
    This file is part of GnuCOBOL.
@@ -26,14 +26,22 @@
 #include	<stddef.h>
 #include	<string.h>
 #include	<errno.h>
-#include	"libcob.h"
-#include	"tarstamp.h"
-
-#include "libcob/cobgetopt.h"
 
 #ifdef	HAVE_LOCALE_H
 #include <locale.h>
 #endif
+#ifdef	HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+#ifdef	_WIN32
+#include <io.h>
+#include <fcntl.h>
+#endif
+
+#include	"libcob.h"
+#include	"tarstamp.h"
+
+#include "libcob/cobgetopt.h"
 
 static int arg_shift = 1;
 static int print_runtime_wanted = 0;
@@ -48,7 +56,7 @@ static const struct option long_options[] = {
 	{"help",		CB_NO_ARG, NULL, 'h'},
 	{"info",		CB_NO_ARG, NULL, 'i'},
 	{"brief",		CB_NO_ARG, NULL, 'q'},
-	{"runtime-conf",		CB_NO_ARG, NULL, 'r'},
+	{"runtime-config",		CB_NO_ARG, NULL, 'r'},
 	{"config",		CB_RQ_ARG, NULL, 'C'},
 	{"version",   		CB_NO_ARG, NULL, 'V'},
 	{"module",		CB_RQ_ARG, NULL, 'm'},
@@ -81,19 +89,19 @@ cobcrun_print_version (void)
 	day = 0;
 	year = 0;
 	status = sscanf (__DATE__, "%s %d %d", month, &day, &year);
-	if (status == 3) {
-		snprintf (cob_build_stamp, (size_t)COB_MINI_MAX,
-			  "%s %2.2d %4.4d %s", month, day, year, __TIME__);
-	} else {
-		/* LCOV_EXCL_START */
+	/* LCOV_EXCL_START */
+	if (status != 3) {
 		snprintf (cob_build_stamp, (size_t)COB_MINI_MAX,
 			"%s %s", __DATE__, __TIME__);
-		/* LCOV_EXCL_STOP */
+	/* LCOV_EXCL_STOP */
+	} else {
+		snprintf (cob_build_stamp, (size_t)COB_MINI_MAX,
+			  "%s %2.2d %4.4d %s", month, day, year, __TIME__);
 	}
 
 	printf ("cobcrun (%s) %s.%d\n",
 		PACKAGE_NAME, PACKAGE_VERSION, PATCH_LEVEL);
-	puts ("Copyright (C) 2017 Free Software Foundation, Inc.");
+	puts ("Copyright (C) 2018 Free Software Foundation, Inc.");
 	puts (_("License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>"));
 	puts (_("This is free software; see the source for copying conditions.  There is NO\n"
 	        "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."));
@@ -125,7 +133,7 @@ cobcrun_print_usage (char * prog)
 	puts (_("  -q, -brief                     reduced displays"));
 #endif
 	puts (_("  -c <file>, -config=<file>      set runtime configuration from <file>"));
-	puts (_("  -r, -runtime-conf              display current runtime configuration\n"
+	puts (_("  -r, -runtime-config            display current runtime configuration\n"
 	        "                                 (value and origin for all settings)"));
 	puts (_("  -M <module>, -module=<module>  set entry point module name and/or load path\n"
 			"                                 where -M module prepends any directory to the\n"
@@ -155,16 +163,19 @@ cobcrun_split_path_file (char** pathname, char** filename, char *pf)
 	char sav;
 
 	/* set pos to last slash (if any) */
-	while ((next_pos = strpbrk (pos + 1, "\\/")) != NULL) pos = next_pos;
-
-	/* set pos to first character after last slash (if any) */
-	if (pf !=pos) pos++;
-
-	/* copy string up to  last slash as pathname (possible emtpy) */
+	while ((next_pos = strpbrk (pos + 1, "\\/")) != NULL) {
+		pos = next_pos;
+	}
+	/* copy string up to last slash as pathname (possible emtpy) */
 	sav = *pos;
 	*pos = 0;
 	*pathname = cob_strdup (pf);
 	*pos = sav;
+
+	/* set pos to first character after last slash (if any) */
+	if (pf != pos) {
+		pos++;
+	}
 
 	/* copy string after last slash as filename (possible emtpy) */
 	*filename = cob_strdup (pos);
@@ -174,47 +185,56 @@ cobcrun_split_path_file (char** pathname, char** filename, char *pf)
  * Prepend a new directory path to the library search COB_LIBRARY_PATH
  * and setup a module COB_PRE_LOAD, for each component included.
  */
-static int
+static const char *
 cobcrun_initial_module (char *module_argument)
 {
 	char	*pathname, *filename;
 	char	env_space[COB_MEDIUM_BUFF], *envptr;
 	/* FIXME: split in two functions (one setting module, one setting path)
 	          after allowing module with path in COB_PRE_LOAD */
+
+	/* LCOV_EXCL_START */
 	if (!module_argument) {
-		return 1;
+		/* never reached (getopt ensures that we have an argument),
+		   just in to keep the analyzer happy */
+		return "missing argument";
 	}
+	/* LCOV_EXCL_STOP */
 
 	/* See if we have a /dir/path/module, or a /dir/path/ or a module (no slash) */
 	cobcrun_split_path_file (&pathname, &filename, module_argument);
 	if (*pathname) {
-		memset (env_space, 0, COB_MEDIUM_BUFF);
+		/* TODO: check content, see libcob/common.h */
 		envptr = getenv ("COB_LIBRARY_PATH");
-		if (envptr) {
+		if (envptr
+		 && strlen (envptr) + strlen (pathname) + 1 < COB_MEDIUM_MAX) {
+			memset (env_space, 0, COB_MEDIUM_BUFF);
 			snprintf (env_space, COB_MEDIUM_MAX, "%s%c%s",
 				pathname, PATHSEP_CHAR, envptr);
+			env_space[COB_MEDIUM_MAX] = 0; /* fixing code analyser warning */
+			(void) cob_setenv ("COB_LIBRARY_PATH", env_space, 1);
 		} else {
-			snprintf (env_space, COB_MEDIUM_MAX, "%s", pathname);
+			(void) cob_setenv ("COB_LIBRARY_PATH", pathname, 1);
 		}
-		env_space[COB_MEDIUM_MAX] = 0; /* fixing code analyser warning */
-		(void) cob_setenv ("COB_LIBRARY_PATH", env_space, 1);
 	}
 	cob_free((void *)pathname);
 
 	if (*filename) {
-		memset(env_space, 0, COB_MEDIUM_BUFF);
+		/* TODO: check content, see libcob/common.h */
 		envptr = getenv ("COB_PRE_LOAD");
-		if (envptr) {
+		if (envptr
+			&& strlen (envptr) + strlen (filename) + 1 < COB_MEDIUM_MAX) {
+			memset (env_space, 0, COB_MEDIUM_BUFF);
 			snprintf (env_space, COB_MEDIUM_MAX, "%s%c%s", filename,
 				PATHSEP_CHAR, envptr);
+			env_space[COB_MEDIUM_MAX] = 0; /* fixing code analyser warning */
+			(void) cob_setenv ("COB_PRE_LOAD", env_space, 1);
 		} else {
-			snprintf (env_space, COB_MEDIUM_MAX, "%s", filename);
+			(void) cob_setenv ("COB_PRE_LOAD", filename, 1);
 		}
-		env_space[COB_MEDIUM_MAX] = 0; /* fixing code analyser warning */
-		(void) cob_setenv ("COB_PRE_LOAD", env_space, 1);
 	}
 	cob_free ((void *)filename);
-	return 0;
+	return NULL;
 }
 
 /**
@@ -224,6 +244,7 @@ static void
 process_command_line (int argc, char *argv[])
 {
 	int			c, idx;
+	const char		*err_msg;
 #ifdef _WIN32
 	int			argnum;
 
@@ -246,15 +267,15 @@ process_command_line (int argc, char *argv[])
 
 		case 'c':
 		case 'C':
-			/* --config=<file> */
+			/* -c <file>, --config=<file> */
+			/* LCOV_EXCL_START */
 			if (strlen (cob_optarg) > COB_SMALL_MAX) {
-				/* LCOV_EXCL_START */
 				fputs (_("invalid configuration file name"), stderr);
 				putc ('\n', stderr);
 				fflush (stderr);
 				exit (1);
-				/* LCOV_EXCL_STOP */
 			}
+			/* LCOV_EXCL_STOP */
 			arg_shift++;
 			(void) cob_setenv ("COB_RUNTIME_CONFIG", cob_optarg, 1);
 			/* shift argument again if two part argument was used */
@@ -278,6 +299,7 @@ process_command_line (int argc, char *argv[])
 			/* removes the path to cobc in argv[0] */
 			strcpy (argv[0], "cobcrun");	/* set for simple compare in test suite
 										   and other static output */
+			arg_shift++;
 			break;
 
 		case 'r':
@@ -292,13 +314,16 @@ process_command_line (int argc, char *argv[])
 			putchar ('\n');
 			print_version ();
 			exit (0);
+
 		case 'M':
 		case 'm':
-			/* --module=<module> */
+			/* -M <module>, --module=<module> */
 			arg_shift++;
-			if (cobcrun_initial_module (cob_optarg)) {
-				fputs (_("invalid module argument"), stderr);
+			err_msg = cobcrun_initial_module (cob_optarg);
+			if (err_msg != NULL) {
+				fprintf (stderr, _("invalid module argument '%s'"), cob_optarg);
 				putc ('\n', stderr);
+				fputs (err_msg, stderr);
 				fflush (stderr);
 				exit (1);
 			}
@@ -307,6 +332,17 @@ process_command_line (int argc, char *argv[])
 				arg_shift++;
 			}
 			break;
+
+		/* LCOV_EXCL_START */
+		default:
+			/* not translated as it is an unlikely internal error: */
+			fprintf (stderr, "missing evaluation of command line option '%c'", c);
+			putc ('\n', stderr);
+			fputs (_("Please report this!"), stderr);
+			fflush (stderr);
+			exit (1);
+		/* LCOV_EXCL_STOP */
+
 		}
 	}
 }
@@ -319,6 +355,19 @@ main (int argc, char **argv)
 {
 	cob_call_union	unifunc;
 
+#ifdef	_WIN32
+	/* Allows running tests under Win */
+	char *p = getenv ("COB_UNIX_LF");
+	if (p && (*p == 'Y' || *p == 'y' ||
+		*p == 'O' || *p == 'o' ||
+		*p == 'T' || *p == 't' ||
+		*p == '1')) {
+		(void)_setmode (_fileno (stdin), _O_BINARY);
+		(void)_setmode (_fileno (stdout), _O_BINARY);
+		(void)_setmode (_fileno (stderr), _O_BINARY);
+	}
+#endif
+
 #ifdef	HAVE_SETLOCALE
 	setlocale (LC_ALL, "");
 #endif
@@ -328,30 +377,35 @@ main (int argc, char **argv)
 	/* At least one option or module name needed */
 	if (argc <= arg_shift) {
 		if (print_runtime_wanted) {
-			cob_init (0, &argv[0]);
+			cob_init_nomain (0, &argv[0]);
 			print_runtime_conf ();
 			cob_stop_run (0);
 		}
-		cobcrun_print_usage (argv[0]);
+		fprintf (stderr, _("%s: missing PROGRAM name"), argv[0]);
+		putc ('\n', stderr);
+		fprintf (stderr, _("Try '%s --help' for more information."), argv[0]);
+		putc ('\n', stderr);
+		fflush (stderr);
 		return 1;
 	}
 
 	if (strlen (argv[arg_shift]) > 31) {
-		fputs (_("PROGRAM name exceeds 31 characters"), stderr);
+		fprintf (stderr, _("%s: PROGRAM name exceeds 31 characters"), argv[0]);
 		putc ('\n', stderr);
-		cob_stop_run (1);
+		fflush (stderr);
+		return 1;
 	}
 
 	/* Initialize the COBOL system, resolve the PROGRAM name */
 	/*   and invoke, wrapped in a STOP RUN, if found */
-	cob_init (argc - arg_shift, &argv[arg_shift]);
+	/*   note: we use cob_init_nomain here as there are no functions */
+	/*         linked here we want to provide for the COBOL environment */
+	cob_init_nomain (argc - arg_shift, &argv[arg_shift]);
 	if (print_runtime_wanted) {
 		print_runtime_conf ();
-		putc ('\n', stderr);
+		putc ('\n', stdout);
 	}
-	unifunc.funcvoid = cob_resolve (argv[arg_shift]);
-	if (unifunc.funcvoid == NULL) {
-		cob_call_error ();
-	}
-	cob_stop_run ( unifunc.funcint() );
+	/* Note: cob_resolve_cobol takes care for call errors, no need to check here */
+	unifunc.funcvoid = cob_resolve_cobol (argv[arg_shift], 0, 1);
+	cob_stop_run (unifunc.funcint());
 }
