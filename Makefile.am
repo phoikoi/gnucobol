@@ -1,67 +1,91 @@
 #
 # Makefile gnucobol
-# Process this file with automake to produce Makefile.in
 #
-# Copyright (C) 2003,2004,2005,2006,2007 Keisuke Nishida
-# Copyright (C) 2008-2011 Roger While
+# Copyright (C) 2003-2012, 2014-2017 Free Software Foundation, Inc.
+# Written by Keisuke Nishida, Roger While, Simon Sobisch
 #
-# This file is part of GNU Cobol.
+# This file is part of GnuCOBOL.
 #
-# The GNU Cobol compiler is free software; you can redistribute it
+# The GnuCOBOL compiler is free software: you can redistribute it
 # and/or modify it under the terms of the GNU General Public License
-# as published by the Free Software Foundation; either version 2 of the
+# as published by the Free Software Foundation, either version 3 of the
 # License, or (at your option) any later version.
 #
-# GNU Cobol is distributed in the hope that it will be useful,
+# GnuCOBOL is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with GNU Cobol; see the file COPYING. If not, write to
-# the Free Software Foundation, 51 Franklin Street, Fifth Floor,
-# Boston, MA 02110-1301 USA
-
-
-bin_SCRIPTS=cob-config
+# along with GnuCOBOL.  If not, see <http://www.gnu.org/licenses/>.
 
 include_HEADERS = libcob.h
 
-SUBDIRS = lib libcob cobc bin config copy po texi tests extras
+SUBDIRS = lib libcob cobc bin config copy po doc extras tests
 
-ACLOCAL_AMFLAGS = -I m4
+# define prerequisites to fix parallel builds
+libcob: lib
+cobc: libcob
+bin: libcob
+po: cobc
+doc: cobc
+extras: cobc
+tests: bin cobc
+
+ACLOCAL_AMFLAGS = -I m4 --install
 BUILT_SOURCES = defaults.h
-DISTCLEANFILES = $(BUILT_SOURCES) cpucheck
-EXTRA_DIST = cpucheck.c COPYING.DOC
+DISTCLEANFILES = $(BUILT_SOURCES)
+# CLEANFILES = $(bin_SCRIPTS)
+
+EXTRA_DIST = gnucobol.spec po/update_linguas.sh
+
+# FIXME: needs GNU make, even if not enabled
+# Add rules for code-coverage testing, as defined by AX_CODE_COVERAGE
+#CODE_COVERAGE_BRANCH_COVERAGE=1
+#@ CODE_COVERAGE_RULES @
 
 dist-hook:
 	echo "#define COB_TAR_DATE \"`date -u +'%b %d %Y %T'` UTC\"" > $(distdir)/tarstamp.h
 	echo "#define COB_NUM_TAR_DATE `date -u +'%Y%m%d'`" >> $(distdir)/tarstamp.h
 	echo "#define COB_NUM_TAR_TIME `date -u +'%H%M%S'`" >> $(distdir)/tarstamp.h
-	find $(distdir) -type d -print | xargs chmod 777
-	chmod 644 $(distdir)/cpucheck.c
-	chmod 644 $(distdir)/bin/cob-config.in
-	chmod 644 $(distdir)/ABOUT-NLS
-	chmod 644 $(distdir)/AUTHORS
-	chmod 644 $(distdir)/COPYING
-	chmod 644 $(distdir)/COPYING.DOC
-	chmod 644 $(distdir)/COPYING.LIB
-	chmod 644 $(distdir)/INSTALL
-	chmod 644 $(distdir)/NEWS
-	chmod 644 $(distdir)/README
-	chmod 644 $(distdir)/THANKS
-	chmod 644 $(distdir)/TODO
-	chmod 755 $(distdir)/ltmain.sh
-	chmod 755 $(distdir)/missing
-	chmod 755 $(distdir)/install-sh
-	chmod 755 $(distdir)/config.guess
-	chmod 755 $(distdir)/config.sub
-	chmod 755 $(distdir)/config.rpath
-	chmod 755 $(distdir)/depcomp
-	chmod 755 $(distdir)/mkinstalldirs
-	touch $(distdir)/tests/run
-	touch $(distdir)/tests/syntax
-	touch $(distdir)/tests/data-rep
+	find $(distdir) -type d -print | xargs chmod 755
+	find $(distdir) -type f -print | xargs chmod 644
+	touch $(distdir)/m4/*.m4
+	touch $(distdir)/aclocal.m4
+	touch $(distdir)/Makefile.in
+	touch $(distdir)/*/Makefile.in
+	touch $(distdir)/*/*/Makefile.in
+	touch $(distdir)/configure
+	touch $(distdir)/config.h.in
+	touch $(distdir)/doc/stamp-vti
+	chmod 755 $(distdir)/build_aux/compile
+	chmod 755 $(distdir)/build_aux/config.guess
+	chmod 755 $(distdir)/build_aux/config.sub
+	chmod 755 $(distdir)/build_aux/config.rpath
+	chmod 755 $(distdir)/build_aux/depcomp
+	chmod 755 $(distdir)/build_aux/install-sh
+	chmod 755 $(distdir)/build_aux/ltmain.sh
+	chmod 755 $(distdir)/build_aux/mdate-sh
+	chmod 755 $(distdir)/build_aux/missing
+	chmod 755 $(distdir)/build_aux/mkinstalldirs
+	chmod 755 $(distdir)/build_aux/ylwrap
+	chmod 755 $(distdir)/configure
+	chmod 755 $(distdir)/doc/cobcinfo.sh
+	chmod 755 $(distdir)/tests/testsuite
+	chmod 755 $(distdir)/tests/listings-sed.sh
+	chmod 755 $(distdir)/po/update_linguas.sh
+#	touch $(distdir)/cobc/ppparse.c
+#	touch $(distdir)/cobc/parser.c
+#	touch $(distdir)/cobc/pplex.c
+#	touch $(distdir)/cobc/scanner.c
+#	$(distdir)/doc/cobcinfo.sh "fixtimestamps"
+#	touch $(distdir)/libcob/libcob.3
+#	touch $(distdir)/bin/cobcrun.1
+#	touch $(distdir)/cobc/cobc.1
+# Create dist_win manually (dist-zip would have the same content as dist-gzip)
+	if test -f create_win_dist.sh; then \
+		EXTSRCDIR=$(srcdir) EXTDISTDIR=$(distdir) ./create_win_dist.sh; \
+	fi
 
 defaults.h: Makefile.am $(top_builddir)/config.status
 	@echo "Creating defaults.h..."
@@ -74,7 +98,6 @@ defaults.h: Makefile.am $(top_builddir)/config.status
 	  echo "#define COB_CONFIG_DIR   \"$(COB_CONFIG_DIR)\"";	\
 	  echo "#define COB_COPY_DIR     \"$(COB_COPY_DIR)\"";		\
 	  echo "#define COB_LIBRARY_PATH \"$(COB_LIBRARY_PATH)\"";	\
-	  echo "#define COB_MODULE_EXT   \"$(COB_MODULE_EXT)\"";	\
 	  echo "#define COB_BLD_CC       \"$(CC)\"";			\
 	  echo "#define COB_BLD_CPPFLAGS \"$(CPPFLAGS)\"";		\
 	  echo "#define COB_BLD_CFLAGS   \"$(CFLAGS)\"";		\
@@ -83,3 +106,12 @@ defaults.h: Makefile.am $(top_builddir)/config.status
 	  echo "#define COB_BLD_BUILD    \"$(build)\"";			\
 	  echo "#define LOCALEDIR        \"$(datadir)/locale\"";	\
 	} > defaults.h
+
+
+# targets that are only logical targets instead of files
+.PHONY: test checkall
+
+test: all
+	cd tests && $(MAKE) $(AM_MAKEFLAGS) test
+
+checkall: check test
